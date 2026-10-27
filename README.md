@@ -39,7 +39,7 @@ La CI de chaque dépôt backend publie et signe l'image sur GHCR, puis ouvre une
 
 Les trois tunnels utilisent `cloudflare/cloudflared:<version>@sha256:<digest>`. Renovate suit la version (PR hebdomadaire, le lundi matin) et met à jour tag et digest ensemble ; la review est manuelle (pas d'automerge sur les changements de version).
 
-Renovate ignore volontairement les images backends `ghcr.io/ag69075/**` (packages privés, référencés par digest seul) : leurs mises à jour passent uniquement par les PR `bump/cyberlab_*` décrites ci-dessus.
+Renovate ignore volontairement les images backends `ghcr.io/ag69075/**` (référencées par digest seul, sans tag à suivre : Renovate ne peut pas déterminer le nouveau digest) : leurs mises à jour passent uniquement par les PR `bump/cyberlab_*` décrites ci-dessus.
 
 ## Healthchecks
 

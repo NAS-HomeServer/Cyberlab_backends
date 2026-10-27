@@ -7,6 +7,14 @@ name: Pipeline Cyberlab Infra
 # (GHCR) ; une PR automatique y reporte le digest dans le compose. Ce pipeline
 # verifie les signatures (job ②, puis playbook) avant tout deploiement.
 on:
+  # Les PR sont controlees (lint + securite) avant merge ; seul un push sur main
+  # ou un declenchement manuel deploie.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cyberlab/**'
+      - 'ansible/playbooks/deploy-cyberlab.yml'
+      - '.github/workflows/cyberlab-infra.yml'
   push:
     branches: [main]
     paths:
@@ -20,7 +28,7 @@ permissions:
 
 concurrency:
   group: deploy-cyberlab-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Workspace distinct de celui du pipeline monitoring (autre depot) : les deux workflows
@@ -41,9 +49,12 @@ jobs:
   lint:
     name: "① Lint"
     runs-on: self-hosted
+    # Runner auto-heberge sur un depot public : on n'execute jamais le code d'une PR
+    # venant d'un fork.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 10
     env:
-      WORKSPACE: /volume2/docker/workspace_cyberlab/lint
+      WORKSPACE: /volume2/docker/workspace_cyberlab/lint-${{ github.run_id }}
     steps:
       # Via démon hôte : le conteneur du runner ne voit pas le même montage
       - name: Nettoyage du répertoire (via démon hôte)
@@ -86,10 +97,11 @@ jobs:
   security:
     name: "② Sécurité"
     runs-on: self-hosted
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     needs: lint
     timeout-minutes: 10
     env:
-      WORKSPACE: /volume2/docker/workspace_cyberlab/security
+      WORKSPACE: /volume2/docker/workspace_cyberlab/security-${{ github.run_id }}
     steps:
       - name: Nettoyage du répertoire (via démon hôte)
         run: |
@@ -166,11 +178,12 @@ jobs:
   deploy:
     name: "③ Deploy Cyberlab"
     runs-on: self-hosted
+    if: github.event_name != 'pull_request'
     needs: security
     environment: production
     timeout-minutes: 10
     env:
-      WORKSPACE: /volume2/docker/workspace_cyberlab/build
+      WORKSPACE: /volume2/docker/workspace_cyberlab/deploy-${{ github.run_id }}
     steps:
       - name: Nettoyage du répertoire (via démon hôte)
         run: |

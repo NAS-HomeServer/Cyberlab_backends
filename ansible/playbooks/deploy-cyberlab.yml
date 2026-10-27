@@ -68,3 +68,44 @@
       changed_when: false
       environment:
         DOCKER_API_VERSION: "1.43"
+
+    # Verification apres deploiement : un playbook sans erreur ne prouve pas que
+    # les services tournent. On attend jusqu'a 60 s que chaque conteneur soit
+    # demarre, sans redemarrage en boucle, et sain quand il declare un healthcheck.
+    - name: "Verification : conteneurs demarres et sains"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - --format
+          - "{{ '{{json .State}}' }}"
+          - "{{ compose.services[item].container_name }}"
+      register: container_state
+      until:
+        - container_state.rc == 0
+        - (container_state.stdout | from_json).Running
+        - not (container_state.stdout | from_json).Restarting
+        - (container_state.stdout | from_json).get('Health', {}).get('Status', 'healthy') == 'healthy'
+      retries: 12
+      delay: 5
+      changed_when: false
+      loop: "{{ backends + tunnels }}"
+      environment:
+        DOCKER_API_VERSION: "1.43"
+
+    # cloudflared n'a pas de healthcheck : on verifie dans ses logs qu'au moins
+    # une connexion au reseau Cloudflare est enregistree.
+    - name: "Verification : tunnels cloudflared connectes a Cloudflare"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - logs
+          - "{{ compose.services[item].container_name }}"
+      register: tunnel_logs
+      until: "'Registered tunnel connection' in (tunnel_logs.stdout ~ tunnel_logs.stderr)"
+      retries: 12
+      delay: 5
+      changed_when: false
+      loop: "{{ tunnels }}"
+      environment:
+        DOCKER_API_VERSION: "1.43"

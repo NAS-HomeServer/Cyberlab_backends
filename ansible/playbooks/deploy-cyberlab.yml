@@ -6,14 +6,15 @@
     cyberlab_project_dir: "/volume2/docker/cyberlab"
     repo_root: "{{ playbook_dir }}/../.."
     cosign_image: "gcr.io/projectsigstore/cosign@sha256:9e5c2f2edc34351160407ca3416c61855bdf9403c3c5936e0f0be7fc261611b8"
-    # Source de verite unique : le docker-compose.yml. Les images a verifier
-    # (celles publiees sur GHCR par les CI des backends) sont lues dedans, il
-    # n'y a plus aucun digest a maintenir dans ce playbook.
+    # Liste des containers du compose (a garder alignee avec docker-compose.yml).
+    # Les images (donc les digests) sont lues dans le compose : rien a maintenir ici.
+    backends: [sherlock, dns-analyzer, audit-orchestrator]
+    tunnels: [cloudflared-sherlock, cloudflared-dns, cloudflared-audit]
     compose: "{{ lookup('ansible.builtin.file', repo_root ~ '/cyberlab/docker-compose.yml') | from_yaml }}"
-    signed_images: "{{ compose.services.values() | map(attribute='image') | select('match', '^ghcr\\.io/') | list }}"
-    # Images cloudflared (tag:version@digest) : pas de signature a verifier,
-    # mais meme affichage "<none>" a corriger (voir la tache de tag en fin de play).
-    cloudflared_images: "{{ compose.services.values() | map(attribute='image') | select('match', '^cloudflare/cloudflared[:@]') | unique | list }}"
+    # Images GHCR signees par les CI des backends (verifiees par Cosign).
+    signed_images: "{{ backends | map('extract', compose.services, 'image') | list }}"
+    # Images cloudflared (tag:version@digest) : pas de signature, juste un tag lisible.
+    cloudflared_images: "{{ tunnels | map('extract', compose.services, 'image') | unique | list }}"
 
   tasks:
     # Gate : on ne deploie que des images signees par le workflow ci.yml de la

@@ -6,21 +6,13 @@
     cyberlab_project_dir: "/volume2/docker/cyberlab"
     repo_root: "{{ playbook_dir }}/../.."
     cosign_image: "gcr.io/projectsigstore/cosign@sha256:9e5c2f2edc34351160407ca3416c61855bdf9403c3c5936e0f0be7fc261611b8"
-    # Liste des containers du compose (a garder alignee avec docker-compose.yml).
-    # Les images (donc les digests) sont lues dans le compose : rien a maintenir ici.
     backends: [sherlock, dns-analyzer, audit-orchestrator]
     tunnels: [cloudflared-sherlock, cloudflared-dns, cloudflared-audit]
     compose: "{{ lookup('ansible.builtin.file', repo_root ~ '/cyberlab/docker-compose.yml') | from_yaml }}"
-    # Images GHCR signees par les CI des backends (verifiees par Cosign).
     signed_images: "{{ backends | map('extract', compose.services, 'image') | list }}"
-    # Images cloudflared (tag:version@digest) : pas de signature, juste un tag lisible.
     cloudflared_images: "{{ tunnels | map('extract', compose.services, 'image') | unique | list }}"
 
   tasks:
-    # Gate : on ne deploie que des images signees par le workflow ci.yml de la
-    # branche main du depot correspondant (owner/repo deduits du nom d'image ;
-    # (?i) car le certificat garde la casse du compte, GHCR force les minuscules).
-    # Si une verification echoue, rien n'est copie ni deploye.
     - name: "Verification de la signature Cosign des images backends"
       ansible.builtin.command:
         argv:
@@ -37,19 +29,12 @@
       loop: "{{ signed_images }}"
       changed_when: false
 
-    # Les .env (secrets) sont deja sur le NAS, hors git, dans les sous-dossiers
-    # de ce repertoire. Les images backends sont epinglees par digest : un
-    # nouveau digest n'etant pas present, pull: missing le tire.
-    # remove_orphans: false par prudence.
     - name: "Deploiement du compose cyberlab"
       ansible.builtin.copy:
         src: "{{ repo_root }}/cyberlab/docker-compose.yml"
         dest: "{{ cyberlab_project_dir }}/docker-compose.yml"
         mode: '0644'
 
-    # Ce compose cree le reseau "cyberlab" (nom fixe) que la stack monitoring
-    # declare en external : le premier deploiement du monitoring exige donc que
-    # ce playbook ait deja tourne une fois.
     - name: "Gestion de la stack Docker Compose cyberlab"
       community.docker.docker_compose_v2:
         project_src: "{{ cyberlab_project_dir }}"
@@ -60,10 +45,6 @@
       environment:
         DOCKER_API_VERSION: "1.43"
 
-    # Cosmetique : une image tiree par digest n'a aucun tag local, Portainer
-    # l'affiche "<none>". On pose un tag fixe "deployed" sur le digest en
-    # service. Le compose reste epingle par digest (verification Cosign et
-    # deploiement inchanges) ; ce tag n'est jamais utilise pour tirer l'image.
     - name: "Tag local 'deployed' sur les images backends (lisibilite Portainer)"
       ansible.builtin.command:
         argv:
@@ -76,10 +57,6 @@
       environment:
         DOCKER_API_VERSION: "1.43"
 
-    # Meme cosmetique pour cloudflared : on rejoue le tag de version du compose
-    # (ex. cloudflare/cloudflared:2026.9.3) sur le digest en service, pour que
-    # Portainer/Synology affichent la version au lieu de "<none>". Le tag est
-    # toujours derive du compose, donc suivi par Renovate sans maintenance ici.
     - name: "Tag local de version sur les images cloudflared (lisibilite Portainer)"
       ansible.builtin.command:
         argv:

@@ -16,13 +16,16 @@ Déploiement des backends du cyberlab sur le NAS : `sherlock`, `dns_analyzer`, `
 
 ## Pipeline CI/CD
 
-[`cyberlab-infra.yml`](.github/workflows/cyberlab-infra.yml) se déclenche sur un push sur `main` qui modifie `cyberlab/**`, le playbook ou le workflow, ou manuellement (`workflow_dispatch`). Runner `self-hosted` sur le NAS.
+[`cyberlab-infra.yml`](.github/workflows/cyberlab-infra.yml) se déclenche sur une pull request ou un push sur `main` qui modifie `cyberlab/**`, le playbook ou le workflow, ou manuellement (`workflow_dispatch`). Runner `self-hosted` sur le NAS.
 
 | Job | Contenu |
 |---|---|
-| ① Lint | `yamllint --strict`, `ansible-lint --profile=production` |
-| ② Sécurité | Cosign (image Trivy, puis signature des images backends GHCR), Gitleaks, Trivy `config` (HIGH/CRITICAL bloquants) |
-| ③ Deploy | Gate `environment: production`, puis build de l'image Ansible (`ansible-runner-cyberlab:<sha>`) et playbook `deploy-cyberlab.yml` depuis cette image |
+| ① Code Quality | `yamllint --strict`, `ansible-lint --profile=production` |
+| ② Security | Cosign (image Trivy, puis signature des images backends GHCR), Gitleaks, Trivy `config` (HIGH/CRITICAL bloquants) |
+| ③ Build & Scan | Build de l'image Ansible (`ansible-runner-cyberlab:<sha>`), Trivy `image` (HIGH/CRITICAL, rapport SARIF en artefact), sauvegarde de l'image scannée |
+| ④ Deploy | Gate `environment: production`, rechargement de l'image scannée si elle a disparu du démon, puis playbook `deploy-cyberlab.yml` depuis cette image |
+
+Sur une pull request, ①, ② et ③ tournent (PR de forks ignorées) ; ④ est réservé à `main` et au déclenchement manuel.
 
 - Workspace `/volume2/docker/workspace_cyberlab`, un sous-dossier par job.
 - Images d'outillage épinglées par digest ; le token GitHub est passé à `curl` via un fichier de config.

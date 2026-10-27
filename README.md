@@ -22,8 +22,7 @@ Déploiement des backends du cyberlab sur le NAS : `sherlock`, `dns_analyzer`, `
 |---|---|
 | ① Lint | `yamllint --strict`, `ansible-lint --profile=production` |
 | ② Sécurité | Cosign (image Trivy, puis signature des images backends GHCR), Gitleaks, Trivy `config` (HIGH/CRITICAL bloquants) |
-| ③ Build | Build de l'image Ansible (`ansible-runner-cyberlab:<sha>`) |
-| ④ Deploy | Playbook `deploy-cyberlab.yml` depuis cette image, gate `environment: production` |
+| ③ Deploy | Gate `environment: production`, puis build de l'image Ansible (`ansible-runner-cyberlab:<sha>`) et playbook `deploy-cyberlab.yml` depuis cette image |
 
 - Workspace `/volume2/docker/workspace_cyberlab`, un sous-dossier par job.
 - Images d'outillage épinglées par digest ; le token GitHub est passé à `curl` via un fichier de config.

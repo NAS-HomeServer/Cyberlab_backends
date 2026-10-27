@@ -157,15 +157,17 @@ jobs:
             rm -rf "$WORKSPACE"
 
   # ─────────────────────────────────────────
-  # JOB 3 — Build de l'image Ansible
+  # JOB 3 — Build de l'image Ansible + Deploy
   # ─────────────────────────────────────────
-  # L'image embarque le repo (COPY . /app) : le job Deploy n'a donc pas besoin
-  # de re-checkout. Elle reste sur le démon hôte, partagé entre les jobs.
-  # Tag distinct par SHA pour éviter toute collision entre deux runs.
-  build:
-    name: "③ Build Image Ansible"
+  # Le build se fait ici, apres l'approbation "production" : une image construite
+  # dans un job separe attendait l'approbation sur le demon hote et pouvait etre
+  # supprimee entre-temps (nettoyage d'images du NAS). L'image embarque le repo
+  # (COPY . /app). Tag distinct par SHA pour eviter toute collision entre deux runs.
+  deploy:
+    name: "③ Deploy Cyberlab"
     runs-on: self-hosted
     needs: security
+    environment: production
     timeout-minutes: 10
     env:
       WORKSPACE: /volume2/docker/workspace_cyberlab/build
@@ -191,22 +193,6 @@ jobs:
           cd "$WORKSPACE"
           docker build -f ci/Dockerfile.ansible-runner -t ansible-runner-cyberlab:${{ github.sha }} .
 
-      - name: Nettoyage final du workspace (via démon hôte)
-        if: always()
-        run: |
-          docker run --rm -v "$WORKSPACE_PARENT":"$WORKSPACE_PARENT" "$ALPINE_IMAGE" \
-            rm -rf "$WORKSPACE"
-
-  # ─────────────────────────────────────────
-  # JOB 4 — Deploy
-  # ─────────────────────────────────────────
-  deploy:
-    name: "④ Deploy Cyberlab"
-    runs-on: self-hosted
-    needs: build
-    environment: production
-    timeout-minutes: 10
-    steps:
       - name: Exécution du playbook cyberlab
         run: |
           docker run --rm \
@@ -221,3 +207,9 @@ jobs:
       - name: Cleanup image
         if: always()
         run: docker rmi ansible-runner-cyberlab:${{ github.sha }} || true
+
+      - name: Nettoyage final du workspace (via démon hôte)
+        if: always()
+        run: |
+          docker run --rm -v "$WORKSPACE_PARENT":"$WORKSPACE_PARENT" "$ALPINE_IMAGE" \
+            rm -rf "$WORKSPACE"

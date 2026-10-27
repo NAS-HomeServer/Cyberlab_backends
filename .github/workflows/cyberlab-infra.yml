@@ -47,7 +47,7 @@ jobs:
   # JOB 1 — Lint (yamllint + ansible-lint)
   # ─────────────────────────────────────────
   lint:
-    name: "① Lint"
+    name: "① Code Quality"
     runs-on: self-hosted
     # Runner auto-heberge sur un depot public : on n'execute jamais le code d'une PR
     # venant d'un fork.
@@ -95,7 +95,7 @@ jobs:
   # JOB 2 — Sécurité (cosign, gitleaks, Trivy config)
   # ─────────────────────────────────────────
   security:
-    name: "② Sécurité"
+    name: "② Security"
     runs-on: self-hosted
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     needs: lint
@@ -169,21 +169,23 @@ jobs:
             rm -rf "$WORKSPACE"
 
   # ─────────────────────────────────────────
-  # JOB 3 — Build de l'image Ansible + Deploy
+  # JOB 3 — Build de l'image Ansible + scan Trivy
   # ─────────────────────────────────────────
-  # Le build se fait ici, apres l'approbation "production" : une image construite
-  # dans un job separe attendait l'approbation sur le demon hote et pouvait etre
-  # supprimee entre-temps (nettoyage d'images du NAS). L'image embarque le repo
-  # (COPY . /app). Tag distinct par SHA pour eviter toute collision entre deux runs.
-  deploy:
-    name: "③ Deploy Cyberlab"
+  # L'image embarque le repo (COPY . /app). Tag distinct par SHA pour eviter toute
+  # collision entre deux runs. Sur main, l'image scannee est sauvegardee
+  # (docker save) : le job Deploy attend l'approbation "production" et l'image peut
+  # etre supprimee du demon hote entre-temps (nettoyage d'images du NAS) ; il la
+  # recharge alors, ce qui deploie exactement l'image qui a ete scannee.
+  build-scan:
+    name: "③ Build & Scan"
     runs-on: self-hosted
-    if: github.event_name != 'pull_request'
     needs: security
-    environment: production
-    timeout-minutes: 10
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 15
     env:
-      WORKSPACE: /volume2/docker/workspace_cyberlab/deploy-${{ github.run_id }}
+      WORKSPACE: /volume2/docker/workspace_cyberlab/build-${{ github.run_id }}
+      IMAGE: ansible-runner-cyberlab:${{ github.sha }}
+      IMAGE_ARCHIVE: /volume2/docker/workspace_cyberlab/images/ansible-runner-cyberlab-${{ github.sha }}.tar.gz
     steps:
       - name: Nettoyage du répertoire (via démon hôte)
         run: |
@@ -204,7 +206,108 @@ jobs:
       - name: Build image Ansible
         run: |
           cd "$WORKSPACE"
-          docker build -f ci/Dockerfile.ansible-runner -t ansible-runner-cyberlab:${{ github.sha }} .
+          docker build --no-cache -f ci/Dockerfile.ansible-runner -t "$IMAGE" .
+
+      # Ecriture dans le filesystem du conteneur puis extraction via `docker cp` :
+      # le SARIF reste exploitable meme si le scan echoue sur des findings
+      # HIGH/CRITICAL (if: always() sur les steps suivants).
+      - name: Trivy — scan image construite
+        run: |
+          set +e
+          CID="trivy-image-${{ github.run_id }}-${{ github.run_attempt }}"
+          docker run --name "$CID" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            ghcr.io/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
+            image \
+            --exit-code 1 \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --format sarif \
+            --output /tmp/trivy-image.sarif \
+            "$IMAGE"
+          SCAN_EXIT=$?
+          docker cp "$CID":/tmp/trivy-image.sarif "$WORKSPACE/trivy-image.sarif"
+          docker rm "$CID" > /dev/null
+          set -e
+          exit $SCAN_EXIT
+
+      - name: Vérifier que le rapport n'est pas vide
+        if: always()
+        run: |
+          [ -s "$WORKSPACE/trivy-image.sarif" ] || { echo "::error::trivy-image.sarif est vide (0 octet) — l'écriture du rapport a échoué"; exit 1; }
+
+      - name: Résumé des vulnérabilités (image)
+        if: always()
+        run: |
+          echo "## 🔒 Rapport de sécurité — image construite" >> "$GITHUB_STEP_SUMMARY"
+          f="$WORKSPACE/trivy-image.sarif"
+          if [ -f "$f" ]; then
+            total=$(jq '[.runs[].results[]?] | length' "$f" 2>/dev/null)
+            errors=$(jq '[.runs[].results[]? | select(.level=="error")] | length' "$f" 2>/dev/null)
+            total="${total:-0}"
+            errors="${errors:-0}"
+            if [ "$errors" -eq 0 ]; then
+              echo "✅ Aucun finding critique/haut ($total au total)" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "**$errors** critique(s)/haute(s) sur $total findings au total" >> "$GITHUB_STEP_SUMMARY"
+              jq -r '.runs[].results[]? | select(.level=="error") | "- \(.message.text)"' "$f" 2>/dev/null \
+                | head -20 >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+      - name: Upload du rapport SARIF image (artefact)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: trivy-image-report-sarif
+          path: ${{ env.WORKSPACE }}/trivy-image.sarif
+          retention-days: 30
+          if-no-files-found: warn
+
+      # Via le demon hote (le conteneur du runner ne voit pas le meme montage).
+      # Les archives de plus d'un jour (deploiements abandonnes) sont purgees.
+      - name: Sauvegarde de l'image scannée (avant approbation)
+        if: github.event_name != 'pull_request'
+        run: |
+          docker save "$IMAGE" | docker run -i --rm -v "$WORKSPACE_PARENT":"$WORKSPACE_PARENT" "$ALPINE_IMAGE" \
+            sh -c "mkdir -p '$(dirname "$IMAGE_ARCHIVE")' && find '$(dirname "$IMAGE_ARCHIVE")' -name '*.tar.gz' -mtime +1 -delete && gzip -1 > '$IMAGE_ARCHIVE'"
+
+      # Sur une PR l'image n'est pas deployee ; sur main, le job Deploy la
+      # reutilise (ou la recharge) : on ne la supprime qu'en cas d'echec.
+      - name: Cleanup image
+        if: github.event_name == 'pull_request' || failure()
+        run: docker rmi "$IMAGE" || true
+
+      - name: Nettoyage final du workspace (via démon hôte)
+        if: always()
+        run: |
+          docker run --rm -v "$WORKSPACE_PARENT":"$WORKSPACE_PARENT" "$ALPINE_IMAGE" \
+            rm -rf "$WORKSPACE"
+
+  # ─────────────────────────────────────────
+  # JOB 4 — Deploy
+  # ─────────────────────────────────────────
+  deploy:
+    name: "④ Deploy"
+    runs-on: self-hosted
+    if: github.event_name != 'pull_request'
+    needs: build-scan
+    environment: production
+    timeout-minutes: 10
+    env:
+      IMAGE: ansible-runner-cyberlab:${{ github.sha }}
+      IMAGE_ARCHIVE: /volume2/docker/workspace_cyberlab/images/ansible-runner-cyberlab-${{ github.sha }}.tar.gz
+    steps:
+      # L'image peut avoir ete supprimee pendant l'attente de l'approbation.
+      - name: Recharger l'image scannée si elle a disparu
+        run: |
+          if docker image inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "Image presente sur le demon hote."
+          else
+            echo "Image absente : rechargement depuis l'archive."
+            docker run --rm -v "$WORKSPACE_PARENT":"$WORKSPACE_PARENT" "$ALPINE_IMAGE" \
+              gzip -dc "$IMAGE_ARCHIVE" | docker load
+          fi
 
       - name: Exécution du playbook cyberlab
         run: |
@@ -212,17 +315,14 @@ jobs:
             -e ANSIBLE_FORCE_COLOR=1 \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v /volume2/docker:/volume2/docker \
-            ansible-runner-cyberlab:${{ github.sha }} \
+            "$IMAGE" \
             ansible-playbook \
               -i ansible/inventory/hosts.ini \
               ansible/playbooks/deploy-cyberlab.yml
 
-      - name: Cleanup image
-        if: always()
-        run: docker rmi ansible-runner-cyberlab:${{ github.sha }} || true
-
-      - name: Nettoyage final du workspace (via démon hôte)
+      - name: Cleanup image et archive
         if: always()
         run: |
+          docker rmi "$IMAGE" || true
           docker run --rm -v "$WORKSPACE_PARENT":"$WORKSPACE_PARENT" "$ALPINE_IMAGE" \
-            rm -rf "$WORKSPACE"
+            rm -f "$IMAGE_ARCHIVE"

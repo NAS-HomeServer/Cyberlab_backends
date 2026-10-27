@@ -182,6 +182,10 @@ jobs:
     needs: security
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 15
+    # security-events: envoi du SARIF dans l'onglet Security (code scanning).
+    permissions:
+      contents: read
+      security-events: write
     env:
       WORKSPACE: /volume2/docker/workspace_cyberlab/build-${{ github.run_id }}
       IMAGE: ansible-runner-cyberlab:${{ github.sha }}
@@ -231,6 +235,30 @@ jobs:
           set -e
           exit $SCAN_EXIT
 
+      # Scan informatif : toutes les severites, failles sans correctif incluses.
+      # Ne bloque jamais le pipeline (le scan ci-dessus reste le seul gate) ; il
+      # alimente l'onglet Security et prouve que les paquets de l'image sont lus.
+      - name: Trivy — scan complet informatif (non bloquant)
+        if: always()
+        continue-on-error: true
+        run: |
+          set +e
+          CID="trivy-image-full-${{ github.run_id }}-${{ github.run_attempt }}"
+          docker run --name "$CID" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            ghcr.io/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c \
+            image \
+            --exit-code 0 \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+            --format sarif \
+            --output /tmp/trivy-image-full.sarif \
+            "$IMAGE"
+          SCAN_EXIT=$?
+          docker cp "$CID":/tmp/trivy-image-full.sarif "$WORKSPACE/trivy-image-full.sarif"
+          docker rm "$CID" > /dev/null
+          set -e
+          exit $SCAN_EXIT
+
       - name: Vérifier que le rapport n'est pas vide
         if: always()
         run: |
@@ -254,15 +282,36 @@ jobs:
                 | head -20 >> "$GITHUB_STEP_SUMMARY"
             fi
           fi
+          full="$WORKSPACE/trivy-image-full.sarif"
+          if [ -s "$full" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Scan complet (informatif, toutes sévérités, sans correctif inclus)** : \
+          $(jq '[.runs[].results[]?] | length' "$full") finding(s) — \
+          $(jq '[.runs[].results[]? | select(.level=="error")] | length' "$full") haute/critique, \
+          $(jq '[.runs[].results[]? | select(.level=="warning")] | length' "$full") moyenne, \
+          $(jq '[.runs[].results[]? | select(.level=="note")] | length' "$full") basse" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload du rapport SARIF image (artefact)
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: trivy-image-report-sarif
-          path: ${{ env.WORKSPACE }}/trivy-image.sarif
+          path: |
+            ${{ env.WORKSPACE }}/trivy-image.sarif
+            ${{ env.WORKSPACE }}/trivy-image-full.sarif
           retention-days: 30
           if-no-files-found: warn
+
+      # Onglet Security > Code scanning. Non bloquant : si le code scanning n'est
+      # pas disponible, le pipeline continue.
+      - name: Envoi du SARIF dans l'onglet Security
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ env.WORKSPACE }}/trivy-image-full.sarif
+          category: trivy-image
 
       # Via le demon hote (le conteneur du runner ne voit pas le meme montage).
       # Les archives de plus d'un jour (deploiements abandonnes) sont purgees.

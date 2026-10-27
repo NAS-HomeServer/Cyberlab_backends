@@ -112,7 +112,7 @@ jobs:
           docker run --rm "$COSIGN_IMAGE" verify \
             --certificate-identity-regexp "https://github.com/aquasecurity/trivy" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+            ghcr.io/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
 
       # Gate anticipé : les signatures des backends sont vérifiées ici, avant le
       # build et surtout avant la demande d'approbation "production". Les images
@@ -144,7 +144,7 @@ jobs:
       - name: Trivy — scan IaC du compose cyberlab
         run: |
           docker run --rm -v "$WORKSPACE":/workspace \
-            ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 config \
+            ghcr.io/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c config \
             --exit-code 1 \
             --severity HIGH,CRITICAL \
             --ignorefile /workspace/.trivyignore \

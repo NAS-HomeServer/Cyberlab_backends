@@ -46,6 +46,13 @@
   ],
   "packageRules": [
     {
+      "description": "Images backend privees (GHCR, digest seul) : Renovate n'a pas acces au registre, deploiement gere par Ansible",
+      "matchPackageNames": [
+        "ghcr.io/ag69075/**"
+      ],
+      "enabled": false
+    },
+    {
       "description": "Docker-compose : pas d'automerge, review manuelle",
       "matchManagers": [
         "docker-compose"

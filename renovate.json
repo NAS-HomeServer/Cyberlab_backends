@@ -46,7 +46,7 @@
   ],
   "packageRules": [
     {
-      "description": "Images backend privees (GHCR, digest seul) : Renovate n'a pas acces au registre, deploiement gere par Ansible",
+      "description": "Images backend GHCR referencees par digest seul, sans tag a suivre : Renovate ne peut pas determiner le nouveau digest ; mises a jour via les PR bump/cyberlab_*",
       "matchPackageNames": [
         "ghcr.io/ag69075/**"
       ],
